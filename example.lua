@@ -48,9 +48,7 @@ print(JSON_text)
 -- Now JSON decode the JSON string
 local result = json.decode(JSON_text)
 print ("The decoded table result:")
-for k, v in pairs(result) do
-   print('', k, v)
-end
+for k, v in pairs(result) do print('', k, v) end
 
 ------------------------
 -- decoding a JSON string containing UTF-16 surrogate pairs
