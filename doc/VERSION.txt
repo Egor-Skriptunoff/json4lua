@@ -1,4 +1,0 @@
-JSON4Lua and JSONRPC4Lua
-Version 1.0.0
-4 March 2015
-http://github.com/craigmj/json4lua/
