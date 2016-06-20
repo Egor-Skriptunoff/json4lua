@@ -1,11 +1,11 @@
-# json4lua #
+# json4lua
 JSON for Lua
 
-## Installation ##
+### Installation
 Just copy json.lua to Lua modules' folder.
 
 
-## Encoding ##
+### Encoding
 
 ```lua
 local json = require('json')
@@ -15,7 +15,7 @@ print(json.encode({ 1, 2, 'fred', {first='mars',second='venus',third='earth'} })
 [1,2,"fred",{"first":"mars","second":"venus","third":"earth"}]
 ```
 
-## Decoding ##
+### Decoding
 
 ```lua
 local json = require("json")
