@@ -3,8 +3,8 @@
 -- json Module.
 -- Author: Craig Mason-Jones
 
--- Version: 1.1.0
--- 2016-05-24
+-- Version: 1.1.1
+-- 2016-09-03
 
 -- This module is released under the MIT License (MIT).
 -- Please see LICENCE.txt for details:
@@ -422,7 +422,8 @@ do
          ['\f'] = '\\f',
          ['\n'] = '\\n',
          ['\r'] = '\\r',
-         ['\t'] = '\\t'
+         ['\t'] = '\\t',
+         ['\127'] = '\\u007F'
    }
    function encodeString(s)
       if type(s)=='number' then
