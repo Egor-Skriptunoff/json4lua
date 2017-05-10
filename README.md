@@ -40,104 +40,103 @@ Primes are:
         4       7
 ```
 
-### Traversing (decoding JSON without creating the result on Lua side)
+### Traversing (dry run decoding JSON without creating the result on Lua side) and partial decoding of JSON
 
-Function  `json.traverse(s, callback, pos)`  traverses JSON and invokes user-supplied callback function
+Traverse is useful to reduce memory usage: no memory-consuming objects are being created in Lua while traversing.  
+Function `json.traverse(s, callback, pos)` traverses JSON,  
+and invokes user-supplied callback function for each item found inside JSON.  
+
+Callback function arguments:
 ```
-   callback function arguments: (path, json_type, value, pos)
+   path, json_type, value, pos, pos_last
       path      is array of nested JSON identifiers, this array is empty for root JSON element
       json_type is one of "null"/"boolean"/"number"/"string"/"array"/"object"
-      value     is defined when json_type is "boolean"/"number"/"string", otherwise value == nil
-      pos       is 1-based index of first character of current JSON element inside JSON string
+      value     is defined when json_type is "null"/"boolean"/"number"/"string", value == nil for "object"/"array"
+      pos       is 1-based index of first character of current JSON element
+      pos_last  is 1-based index of last character of current JSON element (defined only when "value" ~= nil)
 ```
+By default, `value` is `nil` for JSON arrays/objects.  
+Nevertheless, you can get any array/object decoded (instead of get traversed) while traversing JSON.  
+In order to do that, callback function must return true when invoked for that element (when `value == nil`).
+This array/object decoded as Lua value will be sent to you on next invocation of callback function (`value ~= nil`).
+
+Traverse example:
+
 ```lua
-json.traverse([[ 42 ]], callback)
--- will invoke callback function 1 time:
-   callback( {},         "number",  42,    2  )
+json.traverse([[ {"a":true, "b":null, "c":["one","two"], "d":{ "e":{}, "f":[] }, "g":["ten",20,-33.3] } ]], callback)
+-- will invoke callback function 13 times (if callback returns true for array "c" and object "e"):
+--           path        json_type  value           pos  pos_last
+--           ----------  ---------  --------------  ---  --------
+   callback( {},         "object",  nil,            2,   nil )
+   callback( {"a"},      "boolean", true,           7,   10  )
+   callback( {"b"},      "null",    json.null,      17,  20  )  -- special Lua value for JSON null
+   callback( {"c"},      "array",   nil,            27,  nil )  -- this callback returned true (user wants to decode this array)
+   callback( {"c"},      "array",   {"one", "two"}, 27,  39  )  -- the next invocation brings the result of decoding (value ~= nil)
+   callback( {"d"},      "object",  nil,            46,  nil )
+   callback( {"d", "e"}, "object",  nil,            52,  nil )  -- this callback returned true (user wants to decode this object)
+   callback( {"d", "e"}, "object",  json.empty,     52,  53  )  -- the next invocation brings the result of decoding (special Lua value for empty JSON object)
+   callback( {"d", "f"}, "array",   nil,            60,  nil )
+   callback( {"g"},      "array",   nil,            70,  nil )
+   callback( {"g", 1},   "string",  "ten",          71,  75  )
+   callback( {"g", 2},   "number",  20,             77,  78  )
+   callback( {"g", 3},   "number",  -33.3,          80,  84  )
 ```
+
+Example of callback function to get `c` and `e` elements been decoded (instead of traversed):
+
 ```lua
-json.traverse([[ {"a":true, "b":null, "c":["one","two"], "d":{ "e":{}, "f":[] } } ]], callback)
--- will invoke callback function 9 times:
-   callback( {},         "object",  nil,   2  )
-   callback( {"a"},      "boolean", true,  7  )
-   callback( {"b"},      "null",    nil,   17 )
-   callback( {"c"},      "array",   nil,   27 )
-   callback( {"c", 1},   "string",  "one", 28 )
-   callback( {"c", 2},   "string",  "two", 34 )
-   callback( {"d"},      "object",  nil,   46 )
-   callback( {"d", "e"}, "object",  nil,   52 )
-   callback( {"d", "f"}, "array",   nil,   60 )
+local result_c, result_e   --  these variables will hold Lua objects for JSON elements "c" and "e"
+
+local function callback(path, json_type, value, pos, pos_last)
+   -- print(table.concat(path, '/'), json_type, value, pos, pos_last)
+   local elem_name = path[#path]   -- last identifier in element's path
+   if elem_name == "c" then 
+      result_c = value
+   elseif elem_name == "e" then 
+      result_e = value
+   end
+   return elem_name == "c" or elem_name == "e"  -- we want elements "c" and "e" to be decoded instead of be traversed
+end
+
+json.traverse(JSON_string, callback)
 ```
 
+### Reading JSON from file without preloading whole JSON as (huge) Lua string
 
-### Reading JSON chunk-by-chunk
-
-Both decoder functions `json.decode()` and `json.traverse()` can accept JSON as a "loader function" instead of a string.  
-This function will be called repeatedly to return next parts (substrings) of JSON string.  
-An empty string, nil, or no value returned from "loader function" means the end of JSON string.  
+Both functions `json.decode()` and `json.traverse()` can accept JSON as a "loader function" instead of a "whole JSON string".  
+This function will be called repeatedly to return next parts (substrings) of JSON.  
+An empty string, nil, or no value returned from "loader function" means the end of JSON.  
 This may be useful for low-memory devices or for traversing huge JSON files.
 
-
-### Partial decoding of arbitrary element inside JSON
-
-Instead of decoding whole JSON, you can decode its arbitrary element (e.g, array or object) by specifying the position where this element starts.  
-In order to do that, at first you have to traverse JSON to get all positions you need.
-
-
-### Partial decoding of JSON with reading JSON from file
-
 ```lua
--- This is content of "data.txt" file:
--- {"aa":["qq",{"k1":23,"gg":"YAY","Fermat_primes":[3, 5, 17, 257, 65537],"bb":0}]}
-
--- We want to extract (as Lua array) only "Fermat_primes" from this JSON
--- without loading whole JSON to Lua.
-
-local json = require('json')
-
 -- Open file
-local file = io.open('data.txt', 'r')
+local file = assert(io.open('large_json.txt', 'r'))
 
--- Define loader function which will read the file in 64-byte chunks
+-- Define loader function for reading the file in 4KByte chunks
 local function my_json_loader()
-   return file:read(64)
+   return file:read(4*1024)   -- 64 Byte chunks are recommended for RAM-restricted devices
 end
 
-local position  -- We need to know the position of Fermat primes array inside this JSON
+if you_want_to_traverse_JSON_or_to_decode_file_partially then
 
--- Prepare callback function for traverse
-local function my_callback (path, json_type, value, pos)
-   if #path == 3
-      and path[1] == "aa"
-      and path[2] == 2
-      and path[3] == "Fermat_primes"
-      and json_type == "array"
-   then
-      position = pos
+   -- Prepare callback function
+   local function my_callback (path, json_type, value, pos, last_pos)
+      -- Do whatever you need here
+      -- (see examples on using json.traverse)
    end
+
+   -- Do traverse
+   -- Set initial position as 3-rd argument (default 1) if JSON is stored not from the beginning of your file
+   json.traverse(my_json_loader, my_callback)
+
+elseif you_want_to_decode_the_whole_file then
+
+   -- Do decode
+   -- Set initial position as 2-rd argument (default 1) if JSON is stored not from the beginning of your file
+   result = json.decode(my_json_loader)
+
 end
-
--- Step #1: Traverse to get the position
-file:seek("set", 0)
-json.traverse(my_json_loader, my_callback)
-
--- Step #2: Decode only Fermat_primes array
-file:seek("set", position - 1)
-local FP = json.decode(my_json_loader)
-
-print('Fermat_primes:'); for k, v in ipairs(FP) do print(k, v) end
-
+   
 -- Close file
 file:close()
-```
-
-Output:
-
-```
-Fermat_primes:
-1  3
-2  5
-3  17
-4  257
-5  65537
 ```

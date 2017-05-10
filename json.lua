@@ -3,27 +3,29 @@
 -- json Module.
 -- Authors: Craig Mason-Jones, Egor Skriptunoff
 
--- Version: 1.2.0
--- 2017-05-06
+-- Version: 1.2.1
+-- 2017-05-10
 
 -- This module is released under the MIT License (MIT).
 -- Please see LICENCE.txt for details:
 -- https://github.com/craigmj/json4lua/blob/master/doc/LICENCE.txt
 --
 -- USAGE:
--- This module exposes two functions:
---   json.encode(o)
---     Returns the table / string / boolean / number / nil / json.null / json.empty value as a JSON-encoded string.
---   json.decode(json_string)
---     Returns a Lua object populated with the data encoded in the JSON string json_string.
---   json.traverse(json_string, callback)
---     Traverses a JSON string, sends each item to user-supplied callback function, returns nothing.
+-- This module exposes three functions:
+--   json.encode(obj)
+--     Accepts Lua value (table/string/boolean/number/nil/json.null/json.empty) and returns JSON string.
+--   json.decode(s)
+--     Accepts JSON (as string or as loader function) and returns Lua object.
+--   json.traverse(s, callback)
+--     Accepts JSON (as string or as loader function) and user-supplied callback function, returns nothing
+--     Traverses the JSON, sends each item to callback function, no memory-consuming Lua objects are being created.
 
 --
 -- REQUIREMENTS:
 --   Lua 5.1, Lua 5.2, Lua 5.3 or LuaJIT
 --
 -- CHANGELOG
+--   1.2.1   Now you can partially decode JSON while traversing it (callback function should return true).
 --   1.2.0   Some improvements made to be able to use this module on RAM restricted devices:
 --             To read large JSONs, you can now provide "loader function" instead of preloading whole JSON as Lua string.
 --             Added json.traverse() to traverse JSON using callback function (without creating arrays/objects in Lua).
@@ -38,7 +40,7 @@
 --             In objects:
 --                missing values are ignored:           {,,"a":42,,} -> {"a":42}
 --                unquoted identifiers are valid keys:  {a$b_5:42}   -> {"a$b_5":42}
---           Encoder now accepts both 0-based and 1-based Lua arrays (but decoder always loads JSON arrays as 1-based Lua arrays).
+--           Encoder now accepts both 0-based and 1-based Lua arrays (but decoder always converts JSON arrays to 1-based Lua arrays).
 --           Some minor bugs fixed.
 --   1.1.0   Modifications made by Egor Skriptunoff, based on version 1.0.0 taken from
 --              https://github.com/craigmj/json4lua/blob/40fb13b0ec4a70e36f88812848511c5867bed857/json/json.lua.
@@ -77,52 +79,94 @@ do
    local string_char, string_sub, string_find, string_match, string_gsub, string_format
       = string.char, string.sub, string.find, string.match, string.gsub, string.format
    local table_insert, table_remove, table_concat = table.insert, table.remove, table.concat
-   local type, tostring, pairs, assert = type, tostring, pairs, assert
+   local type, tostring, pairs, assert, error = type, tostring, pairs, assert, error
    local loadstring = loadstring or load
 
    -----------------------------------------------------------------------------
    -- Public functions
    -----------------------------------------------------------------------------
-   -- function  json.encode(v)       encodes Lua value to JSON, returns JSON as string.
-   -- function  json.decode(s, pos)  decodes JSON, returns the decoded result as Lua value.
+   -- function  json.encode(obj)       encodes Lua value to JSON, returns JSON as string.
+   -- function  json.decode(s, pos)    decodes JSON, returns the decoded result as Lua value (may be very memory-consuming).
 
    --    Both functions json.encode() and json.decode() work with "special" Lua values json.null and json.empty
    --       special Lua value  json.null    =  JSON value  null
    --       special Lua value  json.empty   =  JSON value  {}     (empty JSON object)
    --       regular Lua empty table         =  JSON value  []     (empty JSON array)
 
-   -- function  json.traverse(s, callback, pos)  traverses JSON using user-supplied callback function, returns nothing
-   --    callback function arguments: (path, json_type, value, pos)
-   --       path      is array of nested JSON identifiers, this array is empty for root JSON element
+   --    Empty JSON objects and JSON nulls require special handling upon sending (encoding).
+   --       Please make sure that you send empty JSON objects as json.empty (instead of empty Lua table).
+   --       Empty Lua tables will be encoded as empty JSON arrays, not as empty JSON objects!
+   --          json.encode( {empt_obj = json.empty, empt_arr = {}} )   -->   {"empt_obj":{},"empt_arr":[]}
+   --       Also make sure you send JSON nulls as json.null (instead of nil).
+   --          json.encode( {correct = json.null, incorrect = nil} )   -->   {"correct":null}
+
+   --    Empty JSON objects and JSON nulls require special handling upon receiving (decoding).
+   --       After receiving the result of decoding, every Lua table returned (including nested tables) should firstly
+   --       be compared with special Lua values json.empty/json.null prior to making operations on these values.
+   --       If you don't need to distinguish between empty JSON objects and empty JSON arrays,
+   --       json.empty may be replaced with newly created regular empty Lua table.
+   --          v = (v == json.empty) and {} or v
+   --       If you don't need special handling of JSON nulls, you may replace json.null with nil to make them disappear.
+   --          if v == json.null then v = nil end
+
+   -- Function  json.traverse(s, callback, pos)  traverses JSON using user-supplied callback function, returns nothing.
+   --    Traverse is useful to reduce memory usage: no memory-consuming objects are being created in Lua while traversing.
+   --    Each item found inside JSON will be sent to callback function passing the following arguments:
+   --    (path, json_type, value, pos, pos_last)
+   --       path      is array of nested JSON identifiers/indices, "path" is empty for root JSON element
    --       json_type is one of "null"/"boolean"/"number"/"string"/"array"/"object"
-   --       value     is defined when json_type is "boolean"/"number"/"string", otherwise value == nil
-   --       pos       is 1-based index of first character of current JSON element inside JSON string
+   --       value     is defined when json_type is "null"/"boolean"/"number"/"string", value == nil for "object"/"array"
+   --       pos       is 1-based index of first character of current JSON element
+   --       pos_last  is 1-based index of last character of current JSON element (defined only when "value" ~= nil)
    -- "path" table reference is the same on each callback invocation, but its content differs every time.
-   --    Do not modify "path" array inside your callback function, use it as read-only
-   --    Do not save reference to "path" for future use (create shallow table copy instead)
+   --    Do not modify "path" array inside your callback function, use it as read-only.
+   --    Do not save reference to "path" for future use (create shallow table copy instead).
+   -- callback function should return a value, when it is invoked with argument "value" == nil
+   --    a truthy value means user wants to decode this JSON object/array and create its Lua counterpart (this may be memory-consuming)
+   --    a falsy value (or no value returned) means user wants to traverse through this JSON object/array
+   --    (returned value is ignored when callback function is invoked with value ~= nil)
 
    -- Traverse examples:
 
    --    json.traverse([[ 42 ]], callback)
    --    will invoke callback 1 time:
-   --       callback( {},         "number",  42,    2  )
-
+   --                 path        json_type  value           pos  pos_last
+   --                 ----------  ---------  --------------  ---  --------
+   --       callback( {},         "number",  42,             2,   3   )
+   --
    --    json.traverse([[ {"a":true, "b":null, "c":["one","two"], "d":{ "e":{}, "f":[] } } ]], callback)
    --    will invoke callback 9 times:
-   --       callback( {},         "object",  nil,   2  )
-   --       callback( {"a"},      "boolean", true,  7  )
-   --       callback( {"b"},      "null",    nil,   17 )
-   --       callback( {"c"},      "array",   nil,   27 )
-   --       callback( {"c", 1},   "string",  "one", 28 )
-   --       callback( {"c", 2},   "string",  "two", 34 )
-   --       callback( {"d"},      "object",  nil,   46 )
-   --       callback( {"d", "e"}, "object",  nil,   52 )
-   --       callback( {"d", "f"}, "array",   nil,   60 )
+   --                 path        json_type  value           pos  pos_last
+   --                 ----------  ---------  --------------  ---  --------
+   --       callback( {},         "object",  nil,            2,   nil )
+   --       callback( {"a"},      "boolean", true,           7,   10  )
+   --       callback( {"b"},      "null",    json.null,      17,  20  )   -- special Lua value for JSON null
+   --       callback( {"c"},      "array",   nil,            27,  nil )
+   --       callback( {"c", 1},   "string",  "one",          28,  32  )
+   --       callback( {"c", 2},   "string",  "two",          34,  38  )
+   --       callback( {"d"},      "object",  nil,            46,  nil )
+   --       callback( {"d", "e"}, "object",  nil,            52,  nil )
+   --       callback( {"d", "f"}, "array",   nil,            60,  nil )
+   --
+   --    json.traverse([[ {"a":true, "b":null, "c":["one","two"], "d":{ "e":{}, "f":[] } } ]], callback)
+   --    will invoke callback 9 times if callback returns true when invoked for array "c" and object "e":
+   --                 path        json_type  value           pos  pos_last
+   --                 ----------  ---------  --------------  ---  --------
+   --       callback( {},         "object",  nil,            2,   nil )
+   --       callback( {"a"},      "boolean", true,           7,   10  )
+   --       callback( {"b"},      "null",    json.null,      17,  20  )
+   --       callback( {"c"},      "array",   nil,            27,  nil )  -- this callback returned true (user wants to decode this array)
+   --       callback( {"c"},      "array",   {"one", "two"}, 27,  39  )  -- the next invocation brings the result of decoding
+   --       callback( {"d"},      "object",  nil,            46,  nil )
+   --       callback( {"d", "e"}, "object",  nil,            52,  nil )  -- this callback returned true (user wants to decode this object)
+   --       callback( {"d", "e"}, "object",  json.empty,     52,  53  )  -- the next invocation brings the result of decoding (special Lua value for empty JSON object)
+   --       callback( {"d", "f"}, "array",   nil,            60,  nil )
+
 
    -- Both decoder functions json.decode(s) and json.traverse(s, callback) can accept JSON (argument s)
    --    as a "loader function" instead of a string.
-   --    This function will be called repeatedly to return next parts (substrings) of JSON string.
-   --    An empty string, nil, or no value returned from "loader function" means the end of JSON string.
+   --    This function will be called repeatedly to return next parts (substrings) of JSON.
+   --    An empty string, nil, or no value returned from "loader function" means the end of JSON.
    --    This may be useful for low-memory devices or for traversing huge JSON files.
 
 
@@ -163,46 +207,48 @@ do
    -- PUBLIC FUNCTIONS
    -----------------------------------------------------------------------------
    --- Encodes an arbitrary Lua object / variable.
-   -- @param   v        The Lua object / variable to be JSON encoded.
-   -- @return  string   String containing the JSON encoding (codepage of Lua strings is preserved)
-   function json.encode(v)
+   -- @param   obj     Lua value (table/string/boolean/number/nil/json.null/json.empty) to be JSON-encoded.
+   -- @return  string  String containing the JSON encoding.
+   function json.encode(obj)
       -- Handle nil and null values
-      if v == nil or v == null then
+      if obj == nil or obj == null then
          return 'null'
       end
 
-      if v == empty then
+      -- Handle empty JSON object
+      if obj == empty then
          return '{}'
       end
 
-      local vtype = type(v)
+      local obj_type = type(obj)
 
       -- Handle strings
-      if vtype == 'string' then
-         return '"'..encodeString(v)..'"'
+      if obj_type == 'string' then
+         return '"'..encodeString(obj)..'"'
       end
 
       -- Handle booleans
-      if vtype == 'boolean' then
-         return tostring(v)
+      if obj_type == 'boolean' then
+         return tostring(obj)
       end
 
-      if vtype == 'number' then
-         assert(isRegularNumber(v), 'numeric values Inf and NaN are unsupported')
-         return math_type(v) == 'integer' and tostring(v) or string_format('%.17g', v)
+      -- Handle numbers
+      if obj_type == 'number' then
+         assert(isRegularNumber(obj), 'numeric values Inf and NaN are unsupported')
+         return math_type(obj) == 'integer' and tostring(obj) or string_format('%.17g', obj)
       end
 
       -- Handle tables
-      if vtype == 'table' then
+      if obj_type == 'table' then
          local rval = {}
          -- Consider arrays separately
-         local bArray, maxCount = isArray(v)
+         local bArray, maxCount = isArray(obj)
          if bArray then
-            for i = v[0] ~= nil and 0 or 1, maxCount do
-               table_insert(rval, json.encode(v[i]))
+            for i = obj[0] ~= nil and 0 or 1, maxCount do
+               table_insert(rval, json.encode(obj[i]))
             end
          else  -- An object, not an array
-            for i, j in pairs(v) do
+            for i, j in pairs(obj) do
                if isConvertibleToString(i) and isEncodable(j) then
                   table_insert(rval, '"'..encodeString(i)..'":'..json.encode(j))
                end
@@ -215,7 +261,7 @@ do
          end
       end
 
-      error('Unable to JSON-encode Lua value of unsupported type "'..vtype..'": '..tostring(v))
+      error('Unable to JSON-encode Lua value of unsupported type "'..obj_type..'": '..tostring(obj))
    end
 
    local function create_state(s)
@@ -237,7 +283,7 @@ do
    end
 
    --- Decodes a JSON string and returns the decoded value as a Lua data structure / value.
-   -- @param   s           The string to scan or loader function.
+   -- @param   s           The string to scan (or "loader function" for getting next substring).
    -- @param   pos         (optional) The position inside s to start scan, default = 1.
    -- @return  Lua object  The object that was scanned, as a Lua table / string / number / boolean / json.null / json.empty.
    function json.decode(s, pos)
@@ -245,8 +291,8 @@ do
    end
 
    --- Traverses a JSON string, sends everything to user-supplied callback function, returns nothing
-   -- @param   s           The string to scan or loader function.
-   -- @param   callback    The user-supplied callback function which accepts arguments (path, json_type, value, pos).
+   -- @param   s           The string to scan (or "loader function" for getting next substring).
+   -- @param   callback    The user-supplied callback function which accepts arguments (path, json_type, value, pos, pos_last).
    -- @param   pos         (optional) The position inside s to start scan, default = 1.
    function json.traverse(s, callback, pos)
       decode(create_state(s), pos or 1, {path = {}, callback = callback})
@@ -298,7 +344,7 @@ do
       -- pattern must be
       --    "^[some set of chars]+"
       -- returns
-      --    matched_string, endPos   for operation "read"   matched_string MAY BE EMPTY
+      --    matched_string, endPos   for operation "read"   (matched_string == "" if no match found)
       --    endPos                   for operation "skip"
       if operation == "read" then
          local t = {}
@@ -330,48 +376,51 @@ do
    --- Decodes a JSON string and returns the decoded value as a Lua data structure / value.
    -- @param   state             The state of JSON reader.
    -- @param   startPos          Starting position where the JSON string is located.
-   -- @param   traverse          (optional) table with fields "path" and "callback" for traversing JSON
-   -- @return  Lua_object,number The object that was scanned, as a Lua table / string / number / boolean / json.null / json.empty,
+   -- @param   traverse          (optional) table with fields "path" and "callback" for traversing JSON.
+   -- @param   decode_key        (optional) boolean flag for decoding key inside JSON object.
+   -- @return  Lua_object,int    The object that was scanned, as a Lua table / string / number / boolean / json.null / json.empty,
    --                            and the position of the first character after the scanned JSON object.
    function decode(state, startPos, traverse, decode_key)
       local curChar, value, nextPos
       startPos, curChar = decode_scanWhitespace(state, startPos)
       if curChar == '{' and not decode_key then
          -- Object
-         if traverse then
-            traverse.callback(traverse.path, "object", nil, startPos)
+         if traverse and traverse.callback(traverse.path, "object", nil, startPos, nil) then
+            -- user wants to decode this JSON object (and get it as Lua value) while traversing
+            local object, endPos = decode_scanObject(state, startPos)
+            traverse.callback(traverse.path, "object", object, startPos, endPos - 1)
+            return false, endPos
          end
          return decode_scanObject(state, startPos, traverse)
       elseif curChar == '[' and not decode_key then
          -- Array
-         if traverse then
-            traverse.callback(traverse.path, "array", nil, startPos)
+         if traverse and traverse.callback(traverse.path, "array", nil, startPos, nil) then
+            -- user wants to decode this JSON array (and get it as Lua value) while traversing
+            local array, endPos = decode_scanArray(state, startPos)
+            traverse.callback(traverse.path, "array", array, startPos, endPos - 1)
+            return false, endPos
          end
          return decode_scanArray(state, startPos, traverse)
       elseif curChar == '"' then
          -- String
          value, nextPos = decode_scanString(state, startPos)
          if traverse then
-            traverse.callback(traverse.path, "string", value, startPos)
+            traverse.callback(traverse.path, "string", value, startPos, nextPos - 1)
          end
       elseif decode_key then
          -- Unquoted string as key name
          return decode_scanIdentifier(state, startPos)
-      elseif string_find("-0123456789", curChar, 1, true) then
+      elseif string_find(curChar, "^[%d%-]") then
          -- Number
          value, nextPos = decode_scanNumber(state, startPos)
          if traverse then
-            traverse.callback(traverse.path, "number", value, startPos)
+            traverse.callback(traverse.path, "number", value, startPos, nextPos - 1)
          end
       else
          -- Otherwise, it must be a constant
          value, nextPos = decode_scanConstant(state, startPos)
          if traverse then
-            if value == null then  -- null
-               traverse.callback(traverse.path, "null", nil, startPos)
-            else                   -- true, false
-               traverse.callback(traverse.path, "boolean", value, startPos)
-            end
+            traverse.callback(traverse.path, value == null and "null" or "boolean", value, startPos, nextPos - 1)
          end
       end
       return value, nextPos
@@ -388,8 +437,8 @@ do
    -- Returns the array and the next starting position
    -- @param   state       The state of JSON reader.
    -- @param   startPos    The starting position for the scan.
-   -- @param   traverse    (optional) table with fields "path" and "callback" for traversing JSON
-   -- @return  table, int  The scanned array as a table, and the position of the next character to scan.
+   -- @param   traverse    (optional) table with fields "path" and "callback" for traversing JSON.
+   -- @return  table,int   The scanned array as a table, and the position of the next character to scan.
    function decode_scanArray(state, startPos, traverse)
       local array = not traverse and {}  -- The return value
       local elem_index, elem_ready, object = 1
@@ -403,9 +452,10 @@ do
                return array, startPos + 1
             elseif curChar == ',' then
                if not elem_ready then
+                  -- missing value in JSON array
                   if traverse then
                      table_insert(traverse.path, elem_index)
-                     traverse.callback(traverse.path, "null", nil, startPos)
+                     traverse.callback(traverse.path, "null", null, startPos, startPos - 1)  -- empty substring: pos_last = pos - 1
                      table_remove(traverse.path)
                   else
                      array[elem_index] = null
@@ -453,9 +503,9 @@ do
    --- Scans a number from the JSON encoded string.
    -- (in fact, also is able to scan numeric +- eqns, which is not in the JSON spec.)
    -- Returns the number, and the position of the next character after the number.
-   -- @param   state          The state of JSON reader.
-   -- @param   startPos       The position at which to start scanning.
-   -- @return  number, int    The extracted number and the position of the next character to scan.
+   -- @param   state        The state of JSON reader.
+   -- @param   startPos     The position at which to start scanning.
+   -- @return  number,int   The extracted number and the position of the next character to scan.
    function decode_scanNumber(state, startPos)
       local stringValue, endPos = match_with_pattern(state, startPos, '^[%+%-%d%.eE]+', "read")
       local stringEval = loadstring('return '..stringValue)
@@ -471,7 +521,7 @@ do
    -- @param   state       The state of JSON reader.
    -- @param   startPos    The starting position of the scan.
    -- @param   traverse    (optional) table with fields "path" and "callback" for traversing JSON
-   -- @return  table, int  The scanned object as a table and the position of the next character to scan.
+   -- @return  table,int   The scanned object as a table and the position of the next character to scan.
    function decode_scanObject(state, startPos, traverse)
       local object, elem_ready = not traverse and empty
       startPos = startPos + 1
@@ -518,7 +568,7 @@ do
    -- Returns the string extracted as a Lua string, and the position after the closing quote.
    -- @param  state        The state of JSON reader.
    -- @param  startPos     The starting position of the scan.
-   -- @return string, int  The extracted string as a Lua string, and the next character to parse.
+   -- @return string,int   The extracted string as a Lua string, and the next character to parse.
    function decode_scanIdentifier(state, startPos)
       local identifier, idx = match_with_pattern(state, startPos, '^[%w_%-%$]+', "read")
       if identifier == "" then
@@ -537,7 +587,7 @@ do
    -- Returns the string extracted as a Lua string, and the position after the closing quote.
    -- @param  state        The state of JSON reader.
    -- @param  startPos     The starting position of the scan.
-   -- @return string, int  The extracted string as a Lua string, and the next character to parse.
+   -- @return string,int   The extracted string as a Lua string, and the next character to parse.
    function decode_scanString(state, startPos)
       local t, idx, surrogate_pair_started, regular_part = {}, startPos + 1
       while true do
@@ -592,7 +642,7 @@ do
    -- Returns the position of the first non-whitespace character.
    -- @param   state      The state of JSON reader.
    -- @param   startPos   The starting position where we should begin removing whitespace.
-   -- @return  int, char  The first position where non-whitespace was encountered, non-whitespace char.
+   -- @return  int,char   The first position where non-whitespace was encountered, non-whitespace char.
    function decode_scanWhitespace(state, startPos)
       while true do
          startPos = match_with_pattern(state, startPos, '^[ \n\r\t]+', "skip")
@@ -639,7 +689,7 @@ do
    -- We consider any table an array if it has indexes 1..n for its n items, and no other data in the table.
    -- I think this method is currently a little 'flaky', but can't think of a good way around it yet...
    -- @param   t                 The table to evaluate as an array
-   -- @return  boolean, number   True if the table can be represented as an array, false otherwise.
+   -- @return  boolean,number    True if the table can be represented as an array, false otherwise.
    --                            If true, the second returned value is the maximum number of indexed elements in the array.
    function isArray(t)
       -- Next we count all the elements, ensuring that any non-indexed elements are not-encodable
