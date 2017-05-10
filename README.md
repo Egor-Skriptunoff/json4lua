@@ -136,7 +136,7 @@ if you_want_to_traverse_JSON_or_to_decode_JSON_partially then
 elseif you_want_to_decode_the_whole_JSON then
 
    -- Do decode
-   -- Set initial position as 2-rd argument (default 1) if JSON is stored not from the beginning of your file
+   -- Set initial position as 2-nd argument (default 1) if JSON is stored not from the beginning of your file
    result = json.decode(my_json_loader)
 
 end
