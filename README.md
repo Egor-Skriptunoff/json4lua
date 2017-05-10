@@ -90,14 +90,14 @@ Example of callback function to get `c` and `e` elements been decoded (instead o
 local result_c, result_e   --  these variables will hold Lua objects for JSON elements "c" and "e"
 
 local function callback(path, json_type, value, pos, pos_last)
-   -- print(table.concat(path, '/'), json_type, value, pos, pos_last)
-   local elem_name = path[#path]   -- last identifier in element's path
-   if elem_name == "c" then 
+   local elem_path = table.concat(path, '/')  -- element's path
+   -- print(elem_path, json_type, value, pos, pos_last)
+   if elem_path == 'c' then 
       result_c = value
-   elseif elem_name == "e" then 
+   elseif elem_path == 'd/e' then 
       result_e = value
    end
-   return elem_name == "c" or elem_name == "e"  -- we want "c" and "e" to be decoded instead of be traversed
+   return elem_path == 'c' or elem_path == 'd/e'  -- we want "c" and "e" to be decoded instead of be traversed
 end
 
 json.traverse(JSON_string, callback)
