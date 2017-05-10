@@ -2,7 +2,7 @@
 JSON for Lua
 
 ### Installation
-Just copy json.lua to Lua modules' folder.
+Just copy "json.lua" to Lua modules' folder.
 
 
 ### Encoding
@@ -40,25 +40,24 @@ Primes are:
         4       7
 ```
 
-### Traversing (dry run decoding JSON without creating the result on Lua side) and partial decoding of JSON
+### Traversing (dry run decoding without creating the result on Lua side) and partial decoding
 
 Traverse is useful to reduce memory usage: no memory-consuming objects are being created in Lua while traversing.  
-Function `json.traverse(s, callback, pos)` traverses JSON,  
-and invokes user-supplied callback function for each item found inside JSON.  
+Function `json.traverse(s, callback, pos)` traverses JSON and invokes user-supplied callback function for each item found inside JSON.  
 
-Callback function arguments:
+`callback()` function arguments:
 ```
-   path, json_type, value, pos, pos_last
-      path      is array of nested JSON identifiers, this array is empty for root JSON element
-      json_type is one of "null"/"boolean"/"number"/"string"/"array"/"object"
-      value     is defined when json_type is "null"/"boolean"/"number"/"string", value == nil for "object"/"array"
-      pos       is 1-based index of first character of current JSON element
-      pos_last  is 1-based index of last character of current JSON element (defined only when "value" ~= nil)
+path, json_type, value, pos, pos_last
+   path      is array of nested JSON identifiers, this array is empty for root JSON element
+   json_type is one of "null"/"boolean"/"number"/"string"/"array"/"object"
+   value     is element's value for "null"/"boolean"/"number"/"string", nil for "object"/"array"
+   pos       is 1-based index of first character of current JSON element
+   pos_last  is 1-based index of last character of current JSON element (defined only when value ~= nil)
 ```
 By default, `value` is `nil` for JSON arrays/objects.  
 Nevertheless, you can get any array/object decoded (instead of get traversed) while traversing JSON.  
-In order to do that, callback function must return true when invoked for that element (when `value == nil`).
-This array/object decoded as Lua value will be sent to you on next invocation of callback function (`value ~= nil`).
+In order to do that, `callback` function must return `true` when invoked for that element (when `value == nil`).  
+This array/object (decoded as Lua value) will be sent to you on next invocation of callback function (`value ~= nil`).
 
 Traverse example:
 
@@ -95,17 +94,17 @@ local function callback(path, json_type, value, pos, pos_last)
    elseif elem_name == "e" then 
       result_e = value
    end
-   return elem_name == "c" or elem_name == "e"  -- we want elements "c" and "e" to be decoded instead of be traversed
+   return elem_name == "c" or elem_name == "e"  -- we want "c" and "e" to be decoded instead of be traversed
 end
 
 json.traverse(JSON_string, callback)
 ```
 
-### Reading JSON from file without preloading whole JSON as (huge) Lua string
+### Reading JSON from file without preloading whole JSON as a huge Lua string
 
 Both functions `json.decode()` and `json.traverse()` can accept JSON as a "loader function" instead of a "whole JSON string".  
 This function will be called repeatedly to return next parts (substrings) of JSON.  
-An empty string, nil, or no value returned from "loader function" means the end of JSON.  
+An empty string, `nil`, or no value returned from "loader function" means the end of JSON.  
 This may be useful for low-memory devices or for traversing huge JSON files.
 
 ```lua
@@ -117,7 +116,7 @@ local function my_json_loader()
    return file:read(4*1024)   -- 64 Byte chunks are recommended for RAM-restricted devices
 end
 
-if you_want_to_traverse_JSON_or_to_decode_file_partially then
+if you_want_to_traverse_JSON_or_to_decode_JSON_partially then
 
    -- Prepare callback function
    local function my_callback (path, json_type, value, pos, last_pos)
@@ -129,7 +128,7 @@ if you_want_to_traverse_JSON_or_to_decode_file_partially then
    -- Set initial position as 3-rd argument (default 1) if JSON is stored not from the beginning of your file
    json.traverse(my_json_loader, my_callback)
 
-elseif you_want_to_decode_the_whole_file then
+elseif you_want_to_decode_the_whole_JSON then
 
    -- Do decode
    -- Set initial position as 2-rd argument (default 1) if JSON is stored not from the beginning of your file
