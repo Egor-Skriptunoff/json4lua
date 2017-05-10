@@ -62,23 +62,24 @@ This array/object (decoded as Lua value) will be sent to you on next invocation 
 Traverse example:
 
 ```lua
-json.traverse([[ {"a":true, "b":null, "c":["one","two"], "d":{ "e":{}, "f":[] }, "g":["ten",20,-33.3] } ]], callback)
--- will invoke callback function 13 times (if callback returns true for array "c" and object "e"):
+local JSON_string = [[ {"a":true, "b":null, "c":["one","two"], "d":{ "e":{}, "f":[] }, "g":["ten",20,-33.3] } ]]
+json.traverse(JSON_string, callback)
+-- callback function will be invoked 13 times (if it returns true for array "c" and object "e"):
 --           path        json_type  value           pos  pos_last
 --           ----------  ---------  --------------  ---  --------
-   callback( {},         "object",  nil,            2,   nil )
-   callback( {"a"},      "boolean", true,           7,   10  )
-   callback( {"b"},      "null",    json.null,      17,  20  )  -- special Lua value for JSON null
-   callback( {"c"},      "array",   nil,            27,  nil )  -- this callback returned true (user wants to decode this array)
-   callback( {"c"},      "array",   {"one", "two"}, 27,  39  )  -- the next invocation brings the result of decoding (value ~= nil)
-   callback( {"d"},      "object",  nil,            46,  nil )
-   callback( {"d", "e"}, "object",  nil,            52,  nil )  -- this callback returned true (user wants to decode this object)
-   callback( {"d", "e"}, "object",  json.empty,     52,  53  )  -- the next invocation brings the result of decoding (special Lua value for empty JSON object)
-   callback( {"d", "f"}, "array",   nil,            60,  nil )
-   callback( {"g"},      "array",   nil,            70,  nil )
-   callback( {"g", 1},   "string",  "ten",          71,  75  )
-   callback( {"g", 2},   "number",  20,             77,  78  )
-   callback( {"g", 3},   "number",  -33.3,          80,  84  )
+-- callback( {},         "object",  nil,            2,   nil )
+-- callback( {"a"},      "boolean", true,           7,   10  )
+-- callback( {"b"},      "null",    json.null,      17,  20  )  -- special Lua value for JSON null
+-- callback( {"c"},      "array",   nil,            27,  nil )  -- this callback returned true (user wants to decode this array)
+-- callback( {"c"},      "array",   {"one", "two"}, 27,  39  )  -- the next invocation brings the result of decoding (value ~= nil)
+-- callback( {"d"},      "object",  nil,            46,  nil )
+-- callback( {"d", "e"}, "object",  nil,            52,  nil )  -- this callback returned true (user wants to decode this object)
+-- callback( {"d", "e"}, "object",  json.empty,     52,  53  )  -- the next invocation brings the result of decoding (special Lua value for empty JSON object)
+-- callback( {"d", "f"}, "array",   nil,            60,  nil )
+-- callback( {"g"},      "array",   nil,            70,  nil )
+-- callback( {"g", 1},   "string",  "ten",          71,  75  )
+-- callback( {"g", 2},   "number",  20,             77,  78  )
+-- callback( {"g", 3},   "number",  -33.3,          80,  84  )
 ```
 
 Example of callback function to get `c` and `e` elements been decoded (instead of traversed):
@@ -98,9 +99,13 @@ local function callback(path, json_type, value, pos, pos_last)
 end
 
 json.traverse(JSON_string, callback)
+
+-- Now variables "result_c" and "result_e" contain decoded JSON elements "c" and "e"
+-- result_c == {"one", "two"}
+-- result_e == json.empty
 ```
 
-### Reading JSON from file without preloading whole JSON as a huge Lua string
+### Reading JSON from a file without preloading whole JSON as a huge Lua string
 
 Both functions `json.decode()` and `json.traverse()` can accept JSON as a "loader function" instead of a "whole JSON string".  
 This function will be called repeatedly to return next parts (substrings) of JSON.  
