@@ -119,8 +119,9 @@ This may be useful for low-memory devices or for traversing huge JSON files.
 local file = assert(io.open('large_json.txt', 'r'))
 
 -- Define loader function for reading the file in 4KByte chunks
+-- (64 Byte chunks are recommended for RAM-restricted devices)
 local function my_json_loader()
-   return file:read(4*1024)   -- 64 Byte chunks are recommended for RAM-restricted devices
+   return file:read(4*1024)
 end
 
 if you_want_to_traverse_JSON_or_to_decode_JSON_partially then
