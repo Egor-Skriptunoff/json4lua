@@ -45,7 +45,7 @@ Primes are:
 Traverse is useful to reduce memory usage: no memory-consuming objects are being created in Lua while traversing.  
 Function `json.traverse(s, callback, pos)` traverses JSON and invokes user-supplied callback function for each item found inside JSON.  
 
-`callback` function is provided with the following arguments:
+`callback` function will be invoked with the following arguments:
 ```
 callback(path, json_type, value, pos, pos_last)
    path      is array of nested JSON identifiers, this array is empty for root JSON element
